@@ -1,7 +1,13 @@
 name: Release MiMi
 on:
   push:
-    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable version tag to publish (for example v1.3.0)
+        required: true
+        type: string
 permissions:
   contents: write
 concurrency:
@@ -11,15 +17,20 @@ jobs:
   release:
     runs-on: macos-15
     timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Validate stable tag and signing configuration
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           test -n "$SPARKLE_PRIVATE_KEY" || { echo 'Set the SPARKLE_PRIVATE_KEY repository secret first.'; exit 1; }
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          test "$GITHUB_REF_NAME" = "v$version"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "v$version"
       - name: Test library, editor and exports
         run: ./scripts/test.sh
       - name: Build universal app, installers and signed update feed
@@ -32,6 +43,6 @@ jobs:
         run: |
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           # Keep an incomplete upload hidden; publish only after every asset is present.
-          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "MiMi $version" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/release-"$version"/*
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "MiMi $version" --generate-notes
+          gh release upload "$RELEASE_TAG" dist/release-"$version"/*
+          gh release edit "$RELEASE_TAG" --draft=false --latest
