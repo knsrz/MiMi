@@ -25,7 +25,7 @@ MiMi 是用 SwiftUI 和 AppKit 编写的原生 macOS Markdown 写作应用。正
 3. 在 [Actions](https://github.com/knsrz/MiMi/actions) 查看构建结果。标签会触发双架构构建，生成 DMG、ZIP、签名的 `appcast.xml` 和 `SHA256SUMS`。全部上传成功后才公开 Release。
 4. 用户在设置中检查更新，即可从 GitHub 下载并安装新版。安装包使用版本专属地址，检查入口固定指向最新 Release 的 `appcast.xml`。
 
-本机仅准备安装包、不发布：执行 `./scripts/package-release.sh`，产物位于 `dist/release-X.Y.Z/`。默认从钥匙串取签名密钥；CI 通过 Secret 注入。发布前会验证归档中的版本、双架构二进制、应用签名、下载地址和 EdDSA 签名。
+本机仅准备安装包、不发布：执行 `./scripts/package-release.sh`，产物位于 `dist/release-X.Y.Z/`。默认从钥匙串取签名密钥；CI 通过 Secret 注入。发布前会启动真实 Sparkle 更新器检查配置，并验证归档中的版本、双架构二进制、应用签名、下载地址和 EdDSA 签名。`./scripts/check-updater.sh --online` 可额外检查线上更新源。
 
 如果 Actions 失败且留下草稿 Release，请先排查日志，删除该次未公开的草稿并重新运行任务；不要覆盖已经公开的版本资产。每次正式发布使用新的版本号。
 

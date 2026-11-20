@@ -13,3 +13,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/test.sh
       - run: ./build.sh
+      - run: ./scripts/check-updater.sh

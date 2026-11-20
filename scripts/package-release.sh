@@ -28,6 +28,7 @@ else
     key_args=(--ed-key-file "$key_file")
 fi
 ./build.sh
+./scripts/check-updater.sh
 assets="$PWD/dist/release-$version"
 # Refuse accidental overwrites of already prepared/signed assets.
 [[ ! -e "$assets" ]] || { echo "$assets already exists; move it aside to rebuild." >&2; exit 1; }
