@@ -584,7 +584,11 @@ extension LibraryStore {
                     switch action {
                     case .open(let selected):
                         access = selected
-                        vault = try FolderVault(root: access.url, journalDirectory: journalDirectory)
+                        if selectedID == nil {
+                            vault = try FolderVault.openOrCreate(at: access.url, journalDirectory: journalDirectory)
+                        } else {
+                            vault = try FolderVault(root: access.url, journalDirectory: journalDirectory)
+                        }
                     case .create(let target, let parent, let source):
                         vault = try withExtendedLifetime(parent) {
                             let library = try source.map(Self.read) ?? Library()

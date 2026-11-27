@@ -205,12 +205,20 @@ final class FolderVault: @unchecked Sendable {
         assetCache.totalCostLimit = 32_000_000
     }
 
+    static func openOrCreate(at root: URL, journalDirectory: URL?) throws -> FolderVault {
+        let root = root.resolvingSymlinksInPath().standardizedFileURL
+        let empty = try coordinate(root, writing: false) { try isEmptyDirectory($0) }
+        if empty { return try create(at: root, with: Library(), journalDirectory: journalDirectory) }
+        return try FolderVault(root: root, journalDirectory: journalDirectory)
+    }
+
     static func create(at destination: URL, with library: Library, journalDirectory: URL? = nil) throws -> FolderVault {
         let validated = try library.validated()
         let fm = FileManager.default
         let target = destination.standardizedFileURL
         let parent = target.deletingLastPathComponent()
-        let staging = parent.appending(path: ".MiMi暂存-\(UUID().uuidString)", directoryHint: .isDirectory)
+        // iCloud Drive can preserve the hidden flag of a dot-prefixed staging folder after a rename.
+        let staging = parent.appending(path: "MiMi暂存-\(UUID().uuidString)", directoryHint: .isDirectory)
         let header = Header()
         try requireDirectory(parent)
         try fm.createDirectory(at: staging, withIntermediateDirectories: false)
@@ -226,10 +234,7 @@ final class FolderVault: @unchecked Sendable {
         }
         try coordinate(target, writing: true) { coordinated in
             if fm.fileExists(atPath: coordinated.path) {
-                try requireDirectory(coordinated)
-                guard try fm.contentsOfDirectory(atPath: coordinated.path).allSatisfy({ $0 == ".DS_Store" }) else {
-                    throw VaultError.occupied
-                }
+                guard try isEmptyDirectory(coordinated) else { throw VaultError.occupied }
                 // Publishing into an existing empty folder must still leave a recognizable
                 // library only after all of its contents have been prepared.
                 _ = try fm.replaceItemAt(coordinated, withItemAt: staging)
@@ -240,6 +245,11 @@ final class FolderVault: @unchecked Sendable {
         return try FolderVault(root: target, journalDirectory: journalDirectory)
     }
 
+    private static func isEmptyDirectory(_ url: URL) throws -> Bool {
+        try requireDirectory(url)
+        return try FileManager.default.contentsOfDirectory(atPath: url.path).allSatisfy { $0 == ".DS_Store" }
+    }
+
     func open() throws -> VaultContents {
         if let journal, fm.fileExists(atPath: journal.path) {
             let pending = try JSONDecoder().decode(ChangeSet.self, from: Data(contentsOf: journal))
@@ -248,6 +258,7 @@ final class FolderVault: @unchecked Sendable {
         return try coordinatedVault { url in
             var scan = try self.scan(url)
             try self.preserveSystemConflicts(in: url, scan: &scan)
+            self.restoreVisibility(at: url, scan: scan)
             return scan.contents
         }
     }
@@ -266,7 +277,11 @@ final class FolderVault: @unchecked Sendable {
             var scan = try self.scan(url)
             try self.preserveSystemConflicts(in: url, scan: &scan)
             try self.apply(changes, to: &scan, at: url)
-            return try self.scan(url).contents
+            let verified = try self.scan(url)
+            if let id = verified.waiting.first(where: { scan.drafts[$0] != nil }), let draft = scan.drafts[id] {
+                throw VaultError.unavailable(draft.name)
+            }
+            return verified.contents
         }
         if let journal, fm.fileExists(atPath: journal.path) { try fm.removeItem(at: journal) }
         return result
@@ -320,8 +335,8 @@ final class FolderVault: @unchecked Sendable {
 
     private func children(_ directory: URL) throws -> [URL] {
         try Self.requireDirectory(directory)
-        return try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                                          options: [.skipsHiddenFiles])
+        return try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            .filter { !$0.lastPathComponent.hasPrefix(".") }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
             .map { directory.appending(path: $0.lastPathComponent, directoryHint: $0.hasDirectoryPath ? .isDirectory : .notDirectory) }
     }
@@ -511,6 +526,20 @@ extension FolderVault {
         }
         if !scan.waiting.isEmpty { scan.warnings.append("\(scan.waiting.count) 篇文稿的文件尚未就绪。") }
         return scan
+    }
+
+    private func restoreVisibility(at root: URL, scan: Scan) {
+        let coreDirectories = [Self.inbox, Self.trash, Self.dataName].map { root.appending(path: $0) }
+        guard !root.lastPathComponent.hasPrefix("."),
+              (try? root.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true,
+              coreDirectories.allSatisfy({ (try? $0.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true })
+        else { return }
+        // Earlier versions could publish the entire managed tree with the hidden flag set.
+        var visible = URLResourceValues()
+        visible.isHidden = false
+        for var url in Array(scan.bodies.values) + Array(scan.directories.values) + coreDirectories + [root] {
+            try? url.setResourceValues(visible)
+        }
     }
 
     private func loadDraft(_ note: Note, text: String, folder: UUID?, trashed: Bool, at root: URL) throws -> Draft {

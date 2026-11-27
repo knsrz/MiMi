@@ -123,9 +123,70 @@ extension Smoke {
             throw CheckFailure(label: "不应覆盖非空目录")
         } catch VaultError.occupied {}
         try check(try Data(contentsOf: unmanaged) == Data("保留此文件".utf8), "建库保护目录中的现有文件")
+        do {
+            _ = try FolderVault.openOrCreate(at: occupied, journalDirectory: journal)
+            throw CheckFailure(label: "打开普通非空目录时不应初始化文库")
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain {}
+        try check(!fm.fileExists(atPath: occupied.appending(path: FolderVault.dataName).path), "打开普通目录后没有写入文库数据")
         let empty = directory.appending(path: "空目录", directoryHint: .isDirectory)
         try fm.createDirectory(at: empty, withIntermediateDirectories: false)
         try check(try FolderVault.create(at: empty, with: Library()).open().library == Library(), "可以在现有空目录创建文库")
+    }
+
+    @MainActor
+    static func emptyFolderWorkspace(_ directory: URL) async throws {
+        let suite = "Inkfolio-Test-\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let root = directory.appending(path: "空文件夹文库", directoryHint: .isDirectory)
+        let journal = directory.appending(path: "empty-workspace-pending", directoryHint: .isDirectory)
+        let fm = FileManager.default
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        try Data().write(to: root.appending(path: ".DS_Store"))
+
+        let store = LibraryStore(preferences: preferences, journalDirectory: journal)
+        defer { store.stopWatchingFolder() }
+        try await store.selectFolder(.open(VaultAccess(root)))
+        try check(store.library == Library(), "打开只有 Finder 元数据的空文件夹时初始化文库")
+
+        let id = store.addDraft(folder: nil)
+        let inbox = root.appending(path: FolderVault.inbox, directoryHint: .isDirectory)
+        let blank = inbox.appending(path: "未命名文稿--\(id.uuidString).md")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !fm.fileExists(atPath: blank.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try check(fm.fileExists(atPath: blank.path), "空白文稿通过自动保存写入 Markdown")
+        try check(store.flush() && store.draft(id) != nil, "自动保存后空白文稿仍在工作台")
+        store.edit(id) { $0.text = "重开后保留这篇正文" }
+        try check(store.flush(), "空白文稿可以继续编辑")
+        let body = inbox.appending(path: "重开后保留这篇正文--\(id.uuidString).md")
+        let metadata = root.appending(path: FolderVault.dataName, directoryHint: .isDirectory)
+        let note = metadata.appending(path: "文稿/\(id.uuidString).json")
+        let unmanaged = root.appending(path: "其他文件.txt")
+        try Data("用户文件".utf8).write(to: unmanaged)
+        try check(try root.resourceValues(forKeys: [.isHiddenKey]).isHidden == false, "新文库可在 Finder 中显示")
+
+        // Model the flags left by the older iCloud Drive creation flow.
+        store.stopWatchingFolder()
+        var hidden = URLResourceValues()
+        hidden.isHidden = true
+        for var url in [root, inbox, root.appending(path: FolderVault.trash), metadata, body, note, unmanaged] {
+            try url.setResourceValues(hidden)
+            try check(try url.resourceValues(forKeys: [.isHiddenKey]).isHidden == true, "测试文件确实带隐藏标记")
+        }
+
+        let reopen = LibraryStore(preferences: preferences, journalDirectory: journal)
+        defer { reopen.stopWatchingFolder() }
+        let reopened = await reopen.reopenSavedFolder()
+        try check(reopened && reopen.draft(id)?.text == "重开后保留这篇正文", "重开隐藏文库时回读正文和元数据")
+        for url in [root, inbox, body] {
+            try check(try url.resourceValues(forKeys: [.isHiddenKey]).isHidden == false, "旧文库和正文恢复 Finder 可见性")
+        }
+        try check(try unmanaged.resourceValues(forKeys: [.isHiddenKey]).isHidden == true, "保留用户文件的隐藏设置")
+        reopen.edit(id) { $0.text = "恢复后的修改" }
+        try check(reopen.flush() && (try String(contentsOf: body, encoding: .utf8)) == "恢复后的修改",
+                  "仍带隐藏标记的元数据支持继续保存正文")
     }
 
     @MainActor
@@ -143,6 +204,7 @@ extension Smoke {
         defer { store.stopWatchingFolder() }
         try await store.selectFolder(.create(root, parent: VaultAccess(directory), source: legacy))
         try check(store.folderURL != nil && store.library == source, "工作台可选定迁移后的文件夹文库")
+        try check(try root.resourceValues(forKeys: [.isHiddenKey]).isHidden == false, "创建的新文库文件夹在 Finder 中可见")
         try check(try Data(contentsOf: legacy) == original, "迁移后原始 JSON 完整保留")
         let id = source.drafts[0].id
         store.edit(id) { $0.text = "正在编辑第一版" }

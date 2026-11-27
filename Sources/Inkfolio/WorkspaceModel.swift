@@ -605,8 +605,8 @@ final class WorkspaceModel: ObservableObject {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = false
-        panel.prompt = "打开文库"
-        panel.message = "选择本机或 iCloud Drive 中已有的 MiMi 文库文件夹。"
+        panel.prompt = "选择文件夹"
+        panel.message = "选择已有的 MiMi 文库文件夹，或选择一个空文件夹创建文库。"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         open(.open(VaultAccess(url)))
     }

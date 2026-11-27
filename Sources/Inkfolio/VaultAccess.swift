@@ -8,11 +8,14 @@ final class VaultAccess: Sendable {
 
         func open() throws -> VaultAccess {
             var stale = false
-            let options: URL.BookmarkResolutionOptions = scoped ? [.withSecurityScope, .withoutUI] : [.withoutUI]
-            let url = try URL(resolvingBookmarkData: data, options: options, relativeTo: nil, bookmarkDataIsStale: &stale)
-            let access = VaultAccess(url)
-            if scoped && !access.scoped { throw VaultError.unavailable(url.lastPathComponent) }
-            return access
+            if scoped, let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
+                                          relativeTo: nil, bookmarkDataIsStale: &stale) {
+                let access = VaultAccess(url)
+                if access.scoped { return access }
+            }
+            // A locally signed update may invalidate the scope while leaving the bookmark's location intact.
+            let url = try URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
+            return VaultAccess(url)
         }
     }
 
