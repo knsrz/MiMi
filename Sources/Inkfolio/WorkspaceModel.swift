@@ -600,7 +600,7 @@ final class WorkspaceModel: ObservableObject {
         if let saved, items.contains(where: { $0.id == saved }) { setPrimary(saved) }
     }
 
-    func openFolder() {
+    func openFolder(onError: ((String) -> Void)? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -608,7 +608,7 @@ final class WorkspaceModel: ObservableObject {
         panel.prompt = "选择文件夹"
         panel.message = "选择已有的 MiMi 文库文件夹，或选择一个空文件夹创建文库。"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(.open(VaultAccess(url)))
+        open(.open(VaultAccess(url)), onError: onError)
     }
 
     func createFolder() {
@@ -631,13 +631,16 @@ final class WorkspaceModel: ObservableObject {
         open(.create(url, parent: VaultAccess(url.deletingLastPathComponent()), source: source))
     }
 
-    private func open(_ action: LibraryStore.FolderAction) {
+    private func open(_ action: LibraryStore.FolderAction, onError: ((String) -> Void)? = nil) {
         Task {
             do {
                 let previous = store.folderURL
                 try await store.selectFolder(action)
                 if previous != store.folderURL { selectOpenedLibrary(usePreferences: false) }
-            } catch { self.error = error.localizedDescription }
+            } catch {
+                if let onError { onError(error.localizedDescription) }
+                else { self.error = error.localizedDescription }
+            }
         }
     }
 

@@ -24,6 +24,7 @@ enum Smoke {
         try folderVault(directory)
         try await emptyFolderWorkspace(directory)
         try await folderWorkspace(directory)
+        try await unavailableVaultOnQuit(directory)
         if let cloudRoot = ProcessInfo.processInfo.environment["INKFOLIO_TEST_ICLOUD_FOLDER"] {
             try await folderProvider(URL(fileURLWithPath: cloudRoot, isDirectory: true))
         }

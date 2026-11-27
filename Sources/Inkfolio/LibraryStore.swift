@@ -427,14 +427,16 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    func exportBackup(to destination: URL) throws {
+    func exportBackup(to destination: URL, recoveringUnsavedChanges: Bool = false) throws {
         if let folderURL {
-            guard flush() else { throw VaultError.incomplete }
-            if let refresh = startFolderJob(refresh: true) {
-                refresh.finished.wait()
-                finish(refresh)
+            if !recoveringUnsavedChanges {
+                guard flush() else { throw VaultError.incomplete }
+                if let refresh = startFolderJob(refresh: true) {
+                    refresh.finished.wait()
+                    finish(refresh)
+                }
+                guard saveError == nil, waiting.isEmpty, folderWarnings.isEmpty else { throw VaultError.incomplete }
             }
-            guard saveError == nil, waiting.isEmpty, folderWarnings.isEmpty else { throw VaultError.incomplete }
             let root = folderURL.resolvingSymlinksInPath().path
             let target = destination.deletingLastPathComponent().resolvingSymlinksInPath().path
             guard target != root, !target.hasPrefix(root + "/") else { throw VaultError.occupied }

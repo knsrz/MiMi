@@ -225,6 +225,48 @@ extension Smoke {
         let restored = directory.appending(path: "workspace-restored", directoryHint: .isDirectory)
         try await reopen.selectFolder(.create(restored, parent: VaultAccess(directory), source: saved))
         try check(reopen.folderURL != store.folderURL && reopen.library == store.library, "备份可以恢复为独立的新文库")
+        reopen.edit(id) { $0.text = "切换前尚未保存的修改" }
+        try await reopen.selectFolder(.open(VaultAccess(root)))
+        try check(reopen.folderURL == store.folderURL && reopen.draft(id)?.text == "后台保存应保留最后一次输入",
+                  "选择现有文库后立即切换位置和文稿")
+        let savedOnSwitch = try FolderVault(root: restored).open().library
+        try check(savedOnSwitch.drafts.first?.text == "切换前尚未保存的修改", "切换文库时保存原文库的修改")
+        let nextLaunch = LibraryStore(preferences: preferences, legacyFile: legacy, journalDirectory: journal)
+        defer { nextLaunch.stopWatchingFolder() }
+        let didReopenSelected = await nextLaunch.reopenSavedFolder()
+        try check(didReopenSelected && nextLaunch.folderURL == store.folderURL, "重启后打开最后选择的文库")
+    }
+
+    @MainActor
+    static func unavailableVaultOnQuit(_ directory: URL) async throws {
+        let suite = "Inkfolio-Test-\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let root = directory.appending(path: "退出测试文库", directoryHint: .isDirectory)
+        let journal = directory.appending(path: "退出测试待保存", directoryHint: .isDirectory)
+        let store = LibraryStore(preferences: preferences, journalDirectory: journal)
+        defer { store.stopWatchingFolder() }
+        try await store.selectFolder(.create(root, parent: VaultAccess(directory), source: nil))
+        let id = store.addDraft(folder: nil, title: "文稿", text: "已经保存的正文")
+        try check(store.flush(), "文库删除前已保存正文")
+
+        let metadata = root.appending(path: FolderVault.dataName, directoryHint: .isDirectory)
+        try FileManager.default.removeItem(at: metadata)
+        try check(store.flush(), "文库文件丢失且没有未保存修改时可以直接退出")
+
+        store.edit(id) { $0.text = "首次保存失败时的正文" }
+        try check(!store.flush() && store.hasRecoverableChanges, "保存失败后存在第一次修改的日志")
+        store.edit(id) { $0.text = "退出时的最新正文" }
+        try check(!store.flush() && !store.hasRecoverableChanges, "旧日志不包含退出时的最新正文")
+
+        let backup = directory.appending(path: "退出恢复副本.json")
+        try store.exportBackup(to: backup, recoveringUnsavedChanges: true)
+        let restored = directory.appending(path: "退出恢复的文库", directoryHint: .isDirectory)
+        let recoveryStore = LibraryStore(preferences: preferences, journalDirectory: journal)
+        defer { recoveryStore.stopWatchingFolder() }
+        try await recoveryStore.selectFolder(.create(restored, parent: VaultAccess(directory), source: backup))
+        try check(recoveryStore.draft(id)?.text == "退出时的最新正文", "退出副本可恢复最新未保存的正文")
+        try check(!FileManager.default.fileExists(atPath: metadata.path), "保存退出副本不会在已删除的文库中写入")
     }
 
     static func folderProvider(_ provider: URL) async throws {

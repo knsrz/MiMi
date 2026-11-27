@@ -68,23 +68,56 @@ struct InkfolioApp: App {
         }
 
         Settings {
-            InkSettings(updater: updater).preferredColorScheme(scheme)
+            InkSettings(updater: updater, store: store, model: model).preferredColorScheme(scheme)
         }
     }
 }
 
 final class InkfolioDelegate: NSObject, NSApplicationDelegate {
     weak var store: LibraryStore?
+    private var confirmingQuit = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let store, !store.openingFolder else { return .terminateCancel }
+        guard let store else { return .terminateNow }
+        guard !store.openingFolder, !confirmingQuit else { return .terminateCancel }
+        confirmingQuit = true
+        defer { confirmingQuit = false }
         guard !store.flush() else { return .terminateNow }
+
         let alert = NSAlert()
-        alert.messageText = "文库还有未提交的修改"
-        alert.informativeText = store.saveError ?? "请先恢复文库访问，再保存并退出。"
+        alert.alertStyle = .warning
+        alert.messageText = "文库还有未保存的修改"
+        let reason = store.saveError ?? "当前文库无法保存。"
+        alert.informativeText = "\(reason)\n可以将当前文库保存为 JSON 副本。直接退出可能丢失尚未写入磁盘的修改。"
         alert.addButton(withTitle: "继续打开 MiMi")
-        if store.hasRecoverableChanges { alert.addButton(withTitle: "保留修改并退出") }
-        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+        alert.addButton(withTitle: "保存副本并退出…")
+        alert.addButton(withTitle: "直接退出").hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertSecondButtonReturn:
+            return saveRecoveryBackup(store) ? .terminateNow : .terminateCancel
+        case .alertThirdButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+
+    @MainActor
+    private func saveRecoveryBackup(_ store: LibraryStore) -> Bool {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "MiMi文库恢复.json"
+        panel.prompt = "保存并退出"
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        do {
+            try store.exportBackup(to: url, recoveringUnsavedChanges: true)
+            return true
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "无法保存文库副本"
+            alert.runModal()
+            return false
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) { store?.stopWatchingFolder() }
@@ -594,6 +627,8 @@ struct ActionIcon: View {
 
 struct InkSettings: View {
     @ObservedObject var updater: AppUpdater
+    @ObservedObject var store: LibraryStore
+    let model: WorkspaceModel
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("editorTheme") private var editorTheme = EditorTheme.paper.rawValue
     @AppStorage("font") private var font = EditorFont.system.rawValue
@@ -607,9 +642,31 @@ struct InkSettings: View {
     @AppStorage("editorWidth") private var editorWidth = 620.0
     @AppStorage("spelling") private var spelling = false
     @State private var choosingFont = false
+    @State private var libraryError: String?
 
     var body: some View {
         Form {
+            if store.usesFolder {
+                Section("文库") {
+                    LabeledContent("当前文库") {
+                        if let url = store.folderURL {
+                            Text((url.path as NSString).abbreviatingWithTildeInPath)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                                .help(url.path)
+                        } else {
+                            Text("尚未选择")
+                        }
+                    }
+                    if store.openingFolder {
+                        ProgressView("正在打开文库…").controlSize(.small)
+                    } else {
+                        Button("选择文库文件夹…") {
+                            model.openFolder { libraryError = $0 }
+                        }
+                    }
+                }
+            }
             Section("外观与风格") {
                 Picker("明暗模式", selection: $appearance) {
                     Text("跟随系统").tag("system")
@@ -666,6 +723,12 @@ struct InkSettings: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 760)
+        .alert("无法打开文库", isPresented: Binding(
+            get: { libraryError != nil },
+            set: { if !$0 { libraryError = nil } }
+        )) {
+            Button("好", role: .cancel) { libraryError = nil }
+        } message: { Text(libraryError ?? "") }
         .sheet(isPresented: $choosingFont) {
             EditorFontPicker(current: EditorFont(rawValue: font) ?? .system) { selection in
                 font = selection.rawValue
